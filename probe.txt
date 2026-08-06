@@ -1,0 +1,9 @@
+Throwaway content for probe pull requests.
+
+Nothing reads this file. It exists so a probe PR can carry a real diff — the
+review lane needs something to review, and the restore half of the acceptance
+test needs something to change in order to push a fresh commit.
+
+Append a line, bump the counter, or rewrite this entirely. It does not matter.
+
+probe-run: 0

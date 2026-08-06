@@ -1,0 +1,55 @@
+name: claude-review
+
+# Automated PR code review via the ci-workflows reusable workflow. The caller
+# owns the triggers + GITHUB_TOKEN permission grant (a called workflow can only
+# downgrade them, never elevate); the reusable workflow owns the action pin and
+# the secret-handling safety model.
+#
+# LOCALLY OWNED — not a sync-manifest target and not a standards-managed file.
+# This fixture is deliberately outside the caller wave: it exists to be broken,
+# and a sync PR into a repo whose whole purpose is holding a bad credential
+# would be noise. Repin it by hand when the fleet pin moves.
+#
+# No `select-runner` job, deliberately: the runner policy states that public
+# repositories and repositories not enrolled for local CI cannot call the
+# governed selector (standards, components/runner-policy/README.md). This repo
+# is public, so it passes the approved hosted runner directly — the same shape
+# claude-code-plugins uses.
+#
+# `synchronize` is included so a pushed commit re-reviews. The acceptance test's
+# restore half pushes rather than re-runs, because a distinct head gives cleaner
+# evidence — the reusable's freshness guard retires a run only when the live head
+# has MOVED past the event's head, so a same-head re-run would also work.
+#
+# Fork PRs receive no secrets and a read-only token, so they are simply not
+# reviewed by design (no token-exfiltration surface).
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  review:
+    permissions:
+      contents: read         # checkout + read the diff
+      pull-requests: write   # post review + track_progress tracking comment
+      id-token: write        # OIDC — mints the Claude GitHub App token
+    # Repo-wide review queue: serializes reviews so parallel PRs queue for the
+    # shared Claude seat instead of contending for it. Job-scoped and repo-wide
+    # by design, and deliberately distinct from the reusable's own inner group
+    # (keyed per PR and head SHA) — a caller group sharing that name would
+    # deadlock the call against itself. `queue: max` admits no
+    # `cancel-in-progress`, which the two cannot be combined with anyway
+    # (https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#jobsjob_idconcurrency).
+    concurrency:
+      group: claude-review-${{ github.repository }}
+      queue: max
+    uses: melodic-software/ci-workflows/.github/workflows/claude-review.yml@c136b27f404dd32ce3873f39a6f3443891d1c16e # v0.9.1
+    with:
+      runner: ubuntu-24.04
+    # Pass only the one named secret (least privilege) rather than `secrets:
+    # inherit`, which would forward every parent secret to the called workflow.
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
