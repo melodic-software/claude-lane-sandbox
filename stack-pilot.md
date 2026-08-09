@@ -27,9 +27,12 @@ merged atomically, and PR #10 was the control.
 ## Not proven here
 
 This fixture carries `RequiresCi: false` and no `pr-issue-linkage` or `pr-title` caller, so it has
-no required checks. That each layer independently satisfies the `ci-gate` ruleset's required
-`ci-status` context follows from each layer getting its own run, but was not observed against a
-live gate. The linkage gate's *inputs* were observed; its verdict was not.
+no required checks. Its only `pull_request` caller is `.github/workflows/claude-review.yml`, and no
+workflow here produces the `ci-status` context at all — so the per-layer observation establishes
+*trigger behavior* only. Whether every layer of a stack emits a correctly named, successfully
+completed `ci-status` check, and therefore satisfies the `ci-gate` ruleset, remains an explicit
+hypothesis until a stack is exercised against a live gate on a `requires-ci` repository. The linkage
+gate's *inputs* were observed; its verdict was not.
 
 ## Conventions this changes
 
