@@ -73,9 +73,7 @@ jobs:
           PR: ${{ steps.pr.outputs.number }}
         run: |
           set -euo pipefail
-          # Who am I?
-          gh api user --jq '{login,type,id}' | tee /tmp/app-user.json
-          # Submit APPROVED review
+          # Installation tokens cannot call GET /user; submit the review directly.
           gh api --method POST \
             "repos/melodic-software/claude-lane-sandbox/pulls/$PR/reviews" \
             -f event=APPROVE \
