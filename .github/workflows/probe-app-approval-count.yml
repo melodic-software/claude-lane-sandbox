@@ -1,0 +1,165 @@
+# Throwaway probe for melodic-software/ci-workflows#256.
+# Asks: does melodic-ai[bot] APPROVED satisfy required_approving_review_count?
+name: probe-app-approval-count
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: Pull request number to approve/probe
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Mint melodic-ai installation token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.MELODIC_APP_ID }}
+          private-key: ${{ secrets.MELODIC_PRIVATE_KEY }}
+          owner: melodic-software
+          repositories: claude-lane-sandbox
+
+      - name: Resolve PR number
+        id: pr
+        env:
+          INPUT_PR: ${{ inputs.pr_number }}
+          EVENT_PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          PR="${INPUT_PR:-}"
+          if [[ -z "$PR" ]]; then
+            PR="${EVENT_PR:-}"
+          fi
+          if [[ -z "$PR" ]]; then
+            echo "No PR number" >&2
+            exit 1
+          fi
+          echo "number=$PR" >> "$GITHUB_OUTPUT"
+
+      - name: Capture baseline reviewDecision (before App approval)
+        id: baseline
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          gh api graphql -f query='
+            query($n:Int!) {
+              repository(owner:"melodic-software", name:"claude-lane-sandbox") {
+                pullRequest(number:$n) {
+                  reviewDecision
+                  mergeStateStatus
+                  author { login }
+                }
+              }
+            }' -F n="$PR" | tee /tmp/baseline.json
+          decision=$(jq -r '.data.repository.pullRequest.reviewDecision // "null"' /tmp/baseline.json)
+          merge=$(jq -r '.data.repository.pullRequest.mergeStateStatus // "null"' /tmp/baseline.json)
+          echo "review_decision=$decision" >> "$GITHUB_OUTPUT"
+          echo "merge_state=$merge" >> "$GITHUB_OUTPUT"
+
+      - name: Submit APPROVED review as melodic-ai[bot]
+        id: approve
+        env:
+          GH_TOKEN: ${{ steps.app-token.outputs.token }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          # Who am I?
+          gh api user --jq '{login,type,id}' | tee /tmp/app-user.json
+          # Submit APPROVED review
+          gh api --method POST \
+            "repos/melodic-software/claude-lane-sandbox/pulls/$PR/reviews" \
+            -f event=APPROVE \
+            -f body='ci-workflows#256 probe: custom App APPROVED review for required_approving_review_count' \
+            | tee /tmp/approve.json
+          echo "review_id=$(jq -r '.id' /tmp/approve.json)" >> "$GITHUB_OUTPUT"
+          echo "review_user=$(jq -r '.user.login' /tmp/approve.json)" >> "$GITHUB_OUTPUT"
+          echo "review_state=$(jq -r '.state' /tmp/approve.json)" >> "$GITHUB_OUTPUT"
+          echo "author_association=$(jq -r '.author_association' /tmp/approve.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Capture post-approval reviewDecision
+        id: after
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.pr.outputs.number }}
+        run: |
+          set -euo pipefail
+          # Brief pause for GitHub to recompute protection state
+          sleep 3
+          gh api graphql -f query='
+            query($n:Int!) {
+              repository(owner:"melodic-software", name:"claude-lane-sandbox") {
+                pullRequest(number:$n) {
+                  reviewDecision
+                  mergeStateStatus
+                  reviews(last:10) {
+                    nodes {
+                      author { login }
+                      state
+                      authorAssociation
+                    }
+                  }
+                }
+              }
+            }' -F n="$PR" | tee /tmp/after.json
+          decision=$(jq -r '.data.repository.pullRequest.reviewDecision // "null"' /tmp/after.json)
+          merge=$(jq -r '.data.repository.pullRequest.mergeStateStatus // "null"' /tmp/after.json)
+          echo "review_decision=$decision" >> "$GITHUB_OUTPUT"
+          echo "merge_state=$merge" >> "$GITHUB_OUTPUT"
+          # Verdict
+          before='${{ steps.baseline.outputs.review_decision }}'
+          if [[ "$before" == "REVIEW_REQUIRED" && "$decision" == "APPROVED" ]]; then
+            verdict=YES
+          elif [[ "$before" == "REVIEW_REQUIRED" && "$decision" == "REVIEW_REQUIRED" ]]; then
+            verdict=NO
+          else
+            verdict="INCONCLUSIVE(before=$before,after=$decision)"
+          fi
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+          echo "VERDICT=$verdict"
+
+      - name: Comment probe evidence on PR
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ steps.pr.outputs.number }}
+          BEFORE: ${{ steps.baseline.outputs.review_decision }}
+          BEFORE_MERGE: ${{ steps.baseline.outputs.merge_state }}
+          AFTER: ${{ steps.after.outputs.review_decision }}
+          AFTER_MERGE: ${{ steps.after.outputs.merge_state }}
+          VERDICT: ${{ steps.after.outputs.verdict }}
+          REVIEW_USER: ${{ steps.approve.outputs.review_user }}
+          REVIEW_STATE: ${{ steps.approve.outputs.review_state }}
+          REVIEW_ASSOC: ${{ steps.approve.outputs.author_association }}
+          REVIEW_ID: ${{ steps.approve.outputs.review_id }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          body=$(cat <<EOF
+          ## ci-workflows#256 App approval probe result
+
+          **Verdict: \`$VERDICT\`** — does custom App APPROVED satisfy \`required_approving_review_count\`?
+
+          | Field | Value |
+          | --- | --- |
+          | App actor | \`$REVIEW_USER\` (\`$REVIEW_STATE\`, association=\`$REVIEW_ASSOC\`) |
+          | Review id | \`$REVIEW_ID\` |
+          | Before \`reviewDecision\` | \`$BEFORE\` (mergeState=\`$BEFORE_MERGE\`) |
+          | After \`reviewDecision\` | \`$AFTER\` (mergeState=\`$AFTER_MERGE\`) |
+          | Ruleset | repo \`TEMP approval-probe required-reviews\` with \`required_approving_review_count: 1\` |
+          | Workflow run | $RUN_URL |
+
+          Interpretation: \`REVIEW_REQUIRED\` → \`APPROVED\` after only the App review ⇒ **YES**. Stays \`REVIEW_REQUIRED\` ⇒ **NO**.
+          EOF
+          )
+          # unwrap leading spaces from heredoc indent
+          body=$(printf '%s\n' "$body" | sed 's/^          //')
+          gh pr comment "$PR" --repo melodic-software/claude-lane-sandbox --body "$body"
