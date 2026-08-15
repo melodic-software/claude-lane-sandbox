@@ -1,0 +1,3 @@
+# Per-user Claude Code config: plugin enable/disable state and local overrides
+# land here, and they are personal rather than shared with the fixture.
+.claude/settings.local.json
