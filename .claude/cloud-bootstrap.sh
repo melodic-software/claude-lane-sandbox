@@ -1,5 +1,17 @@
 #!/usr/bin/env bash
-# SessionStart: install the plugin catalog this repo enables.
+# Cloud bootstrap: install the plugin catalog this repo enables.
+#
+# Two callers run this script:
+#   1. The account environment's setup script, after clone and BEFORE the
+#      session process launches (with CLAUDE_CODE_REMOTE=true). Claude Code
+#      builds its plugin registry at process start and never re-reads it, so
+#      this pre-launch call is the only path that gets plugins loaded at turn
+#      one of a cloud session.
+#   2. The SessionStart hook (startup|resume) in .claude/settings.json, as
+#      per-session drift repair — the environment cache can be ~7 days stale.
+#      Plugins the hook installs go live at the next resume, not in the
+#      session that ran it.
+#
 # Declaring a marketplace is gated on workspace trust and cloud sessions arrive
 # untrusted, so the declaration alone can load nothing there. Hooks run untrusted.
 # Idempotent and best effort: a failed plugin costs its skills, not the session.
@@ -9,7 +21,7 @@
 # whole hook under `set -e` and leave a local session with no plugins at all.
 set -euo pipefail
 
-repo_root="${CLAUDE_PROJECT_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)}"
+repo_root="${CLAUDE_PROJECT_DIR:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"
 cd -- "$repo_root"
 
 command -v claude >/dev/null 2>&1 || exit 0
@@ -23,7 +35,7 @@ settings=".claude/settings.json"
 # free to drift from settings.json the moment either one is renamed or repointed.
 marketplaces=$(jq -r '.extraKnownMarketplaces // {} | keys[]' "$settings" 2>/dev/null || true)
 if [ -z "$marketplaces" ]; then
-	echo "install-plugins: no marketplace declared in $settings" >&2
+	echo "cloud-bootstrap: no marketplace declared in $settings" >&2
 	exit 0
 fi
 
@@ -34,7 +46,7 @@ while IFS=$'\t' read -r name repo; do
 		continue
 	fi
 	claude plugin marketplace add "$repo" --scope user >/dev/null 2>&1 ||
-		echo "install-plugins: could not add the $name marketplace" >&2
+		echo "cloud-bootstrap: could not add the $name marketplace" >&2
 done < <(
 	jq -r '.extraKnownMarketplaces // {} | to_entries[]
            | select(.value.source.repo != null)
@@ -66,7 +78,7 @@ for id in ${wanted[@]+"${wanted[@]}"}; do
 	if claude plugin install "$id" --scope user -y >/dev/null 2>&1; then
 		installed=$((installed + 1))
 	else
-		echo "install-plugins: install failed: $id" >&2
+		echo "cloud-bootstrap: install failed: $id" >&2
 	fi
 done
-echo "install-plugins: ${#wanted[@]} enabled, $installed newly installed"
+echo "cloud-bootstrap: ${#wanted[@]} enabled, $installed newly installed"
