@@ -19,6 +19,8 @@ every lane at once. Hence a repository of its own.
   caller wave, so repin it by hand when the fleet pin moves.
 - `probe.txt` — a throwaway file for probe pull requests to touch, so a PR can
   carry a real diff without inventing content.
+- `stack-pilot.md` — the findings record from the stacked pull request pilot
+  this fixture ran (PRs #6, #7, #8 as the layers, #10 as the control).
 
 ## Working in this repo
 
